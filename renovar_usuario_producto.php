@@ -111,7 +111,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute();
             
             $conn->commit();
-            header("Location: usuarios_productos.php?success=4");
+            
+            // Forzar actualización de estados
+            checkExpiredUsers();
+            updateUserStateBasedOnLoans($usuario_producto_id);
+            
+            // Verificar si hay una URL de retorno
+            if (isset($_POST['return_to']) && !empty($_POST['return_to'])) {
+                $return_url = $_POST['return_to'];
+                if (strpos($return_url, '?') !== false) {
+                    $return_url .= '&refresh=1';
+                } else {
+                    $return_url .= '?refresh=1';
+                }
+                header("Location: " . $return_url);
+            } else {
+                header("Location: usuarios_productos.php?success=4");
+            }
             exit;
         } catch (Exception $e) {
             $conn->rollback();
@@ -141,6 +157,9 @@ if (!$usuario_producto) {
     header("Location: usuarios_productos.php");
     exit;
 }
+
+// Obtener URL de retorno si existe
+$return_to = isset($_GET['return_to']) ? $_GET['return_to'] : '';
 ?>
 
 <div class="container-fluid">
@@ -155,9 +174,15 @@ if (!$usuario_producto) {
                 </div>
             </div>
             <div class="col-auto ms-auto">
-                <a href="usuarios_productos.php" class="btn btn-link">
-                    <i class="fas fa-arrow-left"></i> Volver
-                </a>
+                <?php if (!empty($return_to)): ?>
+                    <a href="<?php echo htmlspecialchars($return_to); ?>" class="btn btn-link">
+                        <i class="fas fa-arrow-left"></i> Volver
+                    </a>
+                <?php else: ?>
+                    <a href="usuarios_productos.php" class="btn btn-link">
+                        <i class="fas fa-arrow-left"></i> Volver
+                    </a>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -230,6 +255,9 @@ if (!$usuario_producto) {
                     <form action="renovar_usuario_producto.php" method="POST">
                         <input type="hidden" name="action" value="renovar">
                         <input type="hidden" name="usuario_producto_id" value="<?php echo $usuario_producto['id']; ?>">
+                        <?php if (!empty($return_to)): ?>
+                            <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($return_to); ?>">
+                        <?php endif; ?>
                         
                         <div class="row">
                             <div class="col-md-6">

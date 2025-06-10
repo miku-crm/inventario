@@ -79,9 +79,72 @@ $('.view-btn').click(function() {
 // Manejar clic en botón cancelar préstamo desde el modal
 $('#modal_cancel_btn').click(function() {
     const prestamoData = $('#viewLoanModal').data('prestamo-data');
-    if (confirm('¿Está seguro de que desea cancelar este préstamo?')) {
-        window.location.href = `prestamos.php?action=cancel&id=${prestamoData.id}`;
+    if (!prestamoData) {
+        console.error('No se encontraron datos del préstamo');
+        return;
     }
+    
+    // Crear y mostrar modal de confirmación con input de precio
+    Swal.fire({
+        title: '¿Cancelar Préstamo?',
+        html: `
+            <div class="mb-3">
+                <label for="precio_negociado" class="form-label">Precio Negociado:</label>
+                <div class="input-group">
+                    <span class="input-group-text">$</span>
+                    <input type="number" 
+                           id="precio_negociado" 
+                           class="form-control" 
+                           step="0.01" 
+                           min="0" 
+                           value="${prestamoData.precio || 0}"
+                           required>
+                </div>
+                <small class="form-text text-muted">
+                    Precio actual: $${formatMoney(prestamoData.precio || 0)}
+                </small>
+            </div>
+        `,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, Cancelar',
+        cancelButtonText: 'No, Volver',
+        preConfirm: () => {
+            const precioNegociado = document.getElementById('precio_negociado').value;
+            if (!precioNegociado || precioNegociado < 0) {
+                Swal.showValidationMessage('Por favor ingrese un precio válido');
+                return false;
+            }
+            return precioNegociado;
+        }
+    }).then((result) => {
+        if (result.isConfirmed) {
+            // Crear form y enviarlo
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'prestamos.php';
+
+            // Agregar campos ocultos
+            const fields = {
+                'action': 'cancel',
+                'id': prestamoData.id,
+                'precio_negociado': result.value
+            };
+
+            for (const [name, value] of Object.entries(fields)) {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = name;
+                input.value = value;
+                form.appendChild(input);
+            }
+
+            document.body.appendChild(form);
+            form.submit();
+        }
+    });
 });
 
 // Manejar clic en botón copiar datos desde el modal

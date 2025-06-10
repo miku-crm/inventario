@@ -94,21 +94,43 @@ require_once __DIR__ . '/../auth/auth_check.php';
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
 
-    /* Ajustes para el menú */
-    .nav-link {
-        color: #fff !important;
-        padding: 12px 20px;
-        transition: background-color 0.2s;
-        border-radius: 4px;
-        margin: 2px 10px;
+    /* Estilos para el menú */
+    .nav-group {
+        margin-bottom: 1rem;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        padding-bottom: 0.5rem;
+    }
+
+    .nav-group-title {
+        color: #adb5bd;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        padding: 0.5rem 1.5rem;
+        margin-bottom: 0.5rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+    }
+
+    .nav-item .nav-link {
+        padding-left: 2.5rem;
+    }
+
+    .nav-item .nav-link i {
+        width: 1.25rem;
+        text-align: center;
+        margin-right: 0.5rem;
     }
 
     .nav-link:hover {
         background-color: rgba(255,255,255,0.1);
+        border-radius: 4px;
+        margin: 2px 10px;
     }
 
     .nav-link.active {
         background-color: #0d6efd;
+        border-radius: 4px;
+        margin: 2px 10px;
     }
 
     /* Ajustes para botones */
@@ -181,87 +203,103 @@ require_once __DIR__ . '/../auth/auth_check.php';
         <?php endif; ?>
 
         <ul class="nav flex-column mt-3">
-            <li class="nav-item">
-                <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'index.php' ? 'active' : ''; ?>" 
-                   href="/index.php">
-                    <i class="fas fa-home"></i> Dashboard
-                </a>
-            </li>
+            <!-- Dashboard -->
+            <div class="nav-group">
+                <div class="nav-group-title">Principal</div>
+                <li class="nav-item">
+                    <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'index.php' ? 'active' : ''; ?>" 
+                       href="/index.php">
+                        <i class="fas fa-tachometer-alt"></i> Dashboard
+                    </a>
+                </li>
+            </div>
             
-            <!-- Sección de Préstamos -->
-            <li class="nav-item">
-                <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'prestamos.php' ? 'active' : ''; ?>" 
-                   href="/prestamos.php">
-                    <i class="fas fa-handshake"></i> Préstamos Activos
-                </a>
-            </li>
-            
-            <li class="nav-item">
-                <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'historial_prestamos.php' ? 'active' : ''; ?>" 
-                   href="/historial_prestamos.php">
-                    <i class="fas fa-history"></i> Historial
-                </a>
-            </li>
+            <!-- Gestión de Préstamos -->
+            <div class="nav-group">
+                <div class="nav-group-title">Préstamos</div>
+                <li class="nav-item">
+                    <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'prestamos.php' ? 'active' : ''; ?>" 
+                       href="/prestamos.php">
+                        <i class="fas fa-handshake"></i> Préstamos Activos
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'historial_prestamos.php' ? 'active' : ''; ?>" 
+                       href="/historial_prestamos.php">
+                        <i class="fas fa-history"></i> Historial
+                    </a>
+                </li>
+            </div>
 
-            <!-- Sección de Inventario -->
-            <li class="nav-item">
-                <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'productos.php' ? 'active' : ''; ?>" 
-                   href="/productos.php">
-                    <i class="fas fa-box"></i> Productos
-                </a>
-            </li>
+            <!-- Gestión de Inventario -->
+            <div class="nav-group">
+                <div class="nav-group-title">Inventario</div>
+                <li class="nav-item">
+                    <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'productos.php' ? 'active' : ''; ?>" 
+                       href="/productos.php">
+                        <i class="fas fa-box"></i> Productos
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'entradas.php' ? 'active' : ''; ?>" 
+                       href="/entradas.php">
+                        <i class="fas fa-truck-loading"></i> Entradas
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'proveedores.php' ? 'active' : ''; ?>" 
+                       href="/proveedores.php">
+                        <i class="fas fa-truck"></i> Proveedores
+                    </a>
+                </li>
+            </div>
 
-            <li class="nav-item">
-                <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'entradas.php' ? 'active' : ''; ?>" 
-                   href="/entradas.php">
-                    <i class="fas fa-truck-loading"></i> Entradas
-                </a>
-            </li>
+            <!-- Gestión de Usuarios -->
+            <div class="nav-group">
+                <div class="nav-group-title">Usuarios</div>
+                <li class="nav-item">
+                    <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'clientes.php' ? 'active' : ''; ?>" 
+                       href="/clientes.php">
+                        <i class="fas fa-users"></i> Clientes
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'usuarios_productos.php' ? 'active' : ''; ?>" 
+                       href="/usuarios_productos.php">
+                        <i class="fas fa-user-tag"></i> Usuarios Productos
+                    </a>
+                </li>
+                <?php if (checkPermission('admin')): ?>
+                <li class="nav-item">
+                    <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'usuarios.php' ? 'active' : ''; ?>" 
+                       href="/usuarios.php">
+                        <i class="fas fa-user-shield"></i> Usuarios Sistema
+                    </a>
+                </li>
+                <?php endif; ?>
+            </div>
 
-            <li class="nav-item">
-                <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'proveedores.php' ? 'active' : ''; ?>" 
-                   href="/proveedores.php">
-                    <i class="fas fa-truck"></i> Proveedores
-                </a>
-            </li>
-
-            <!-- Sección de Usuarios -->
-            <li class="nav-item">
-                <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'clientes.php' ? 'active' : ''; ?>" 
-                   href="/clientes.php">
-                    <i class="fas fa-users"></i> Clientes
-                </a>
-            </li>
-
-            <li class="nav-item">
-                <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'usuarios_productos.php' ? 'active' : ''; ?>" 
-                   href="/usuarios_productos.php">
-                    <i class="fas fa-user-tag"></i> Usuarios Productos
-                </a>
-            </li>
-
+            <!-- Reportes -->
             <?php if (checkPermission('admin')): ?>
-            <li class="nav-item">
-                <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'usuarios.php' ? 'active' : ''; ?>" 
-                   href="/usuarios.php">
-                    <i class="fas fa-user-shield"></i> Usuarios
-                </a>
-            </li>
-
-            <!-- Sección de Reportes -->
-            <li class="nav-item">
-                <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'reportes.php' ? 'active' : ''; ?>" 
-                   href="/reportes.php">
-                    <i class="fas fa-chart-bar"></i> Reportes
-                </a>
-            </li>
+            <div class="nav-group">
+                <div class="nav-group-title">Análisis</div>
+                <li class="nav-item">
+                    <a class="nav-link text-white <?php echo basename($_SERVER['PHP_SELF']) == 'reportes.php' ? 'active' : ''; ?>" 
+                       href="/reportes.php">
+                        <i class="fas fa-chart-bar"></i> Reportes
+                    </a>
+                </li>
+            </div>
             <?php endif; ?>
 
-            <li class="nav-item mt-4">
-                <a class="nav-link text-danger" href="/auth/logout.php">
-                    <i class="fas fa-sign-out-alt"></i> Cerrar Sesión
-                </a>
-            </li>
+            <!-- Cerrar Sesión -->
+            <div class="nav-group">
+                <li class="nav-item">
+                    <a class="nav-link text-danger" href="/auth/logout.php">
+                        <i class="fas fa-sign-out-alt"></i> Cerrar Sesión
+                    </a>
+                </li>
+            </div>
         </ul>
     </nav>
 
@@ -292,6 +330,23 @@ require_once __DIR__ . '/../auth/auth_check.php';
                 $('.sidebar').removeClass('show');
             }
         });
+
+        // Highlight current section in menu
+        const currentPath = window.location.pathname;
+        $('.nav-link').each(function() {
+            const linkPath = $(this).attr('href');
+            if (currentPath === linkPath) {
+                $(this).addClass('active');
+                // Highlight parent nav-group
+                $(this).closest('.nav-group').addClass('active-group');
+            }
+        });
+
+        // Add hover effect for menu items
+        $('.nav-link').hover(
+            function() { $(this).addClass('hover'); },
+            function() { $(this).removeClass('hover'); }
+        );
     });
     </script>
 </body>

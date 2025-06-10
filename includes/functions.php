@@ -21,13 +21,13 @@ function formatMoney($amount) {
 // Función para verificar si un usuario está ocupado
 function isUserOccupied($userId) {
     global $conn;
-    $query = "SELECT estado FROM usuarios_productos WHERE id = ?";
+    $query = "SELECT prestamos_activos FROM usuarios_productos WHERE id = ?";
     $stmt = $conn->prepare($query);
     $stmt->bind_param("i", $userId);
     $stmt->execute();
     $result = $stmt->get_result();
     $row = $result->fetch_assoc();
-    return $row['estado'] === 'OCUPADO';
+    return $row && $row['prestamos_activos'] > 0;
 }
 
 // Función para actualizar el estado de un usuario
@@ -63,36 +63,74 @@ function checkExpiredUsers() {
     global $conn;
     $today = date('Y-m-d');
     
+    echo "<!-- Debug: checkExpiredUsers iniciado. Fecha actual: " . $today . " -->";
+    
     // Iniciar transacción
     $conn->begin_transaction();
     
     try {
-        // Marcar usuarios como expirados si su fecha de expiración ha pasado
+        // Primero verificar si hay usuarios sin estado
         $query = "UPDATE usuarios_productos 
-                 SET estado = 'EXPIRADO' 
+                 SET estado = 'LIBRE' 
+                 WHERE (estado = '' OR estado IS NULL)
+                 AND prestamos_activos = 0";
+        $stmt = $conn->prepare($query);
+        $stmt->execute();
+        echo "<!-- Debug: Usuarios sin estado actualizados: " . $stmt->affected_rows . " -->";
+        
+        // Marcar usuarios sin préstamos como LIBRE si su fecha no ha expirado
+        $query = "UPDATE usuarios_productos 
+                 SET estado = 'LIBRE' 
+                 WHERE fecha_expiracion >= ? 
+                 AND prestamos_activos = 0 
+                 AND estado != 'LIBRE'";
+        $stmt = $conn->prepare($query);
+        $stmt->bind_param("s", $today);
+        $stmt->execute();
+        echo "<!-- Debug: Usuarios libres actualizados: " . $stmt->affected_rows . " -->";
+        
+        // Marcar usuarios con préstamos como OCUPADO si su fecha no ha expirado
+        $query = "UPDATE usuarios_productos 
+                 SET estado = 'OCUPADO' 
+                 WHERE fecha_expiracion >= ? 
+                 AND prestamos_activos > 0 
+                 AND estado != 'OCUPADO'";
+        $stmt = $conn->prepare($query);
+        $stmt->bind_param("s", $today);
+        $stmt->execute();
+        echo "<!-- Debug: Usuarios ocupados actualizados: " . $stmt->affected_rows . " -->";
+        
+        // Marcar usuarios como vencidos si su fecha de expiración ha pasado
+        $query = "UPDATE usuarios_productos 
+                 SET estado = 'VENCIDO' 
                  WHERE fecha_expiracion < ? 
-                 AND estado != 'EXPIRADO'";
+                 AND estado != 'VENCIDO'";
         $stmt = $conn->prepare($query);
         $stmt->bind_param("s", $today);
         $stmt->execute();
         
-        // Registrar en historial los cambios
+        echo "<!-- Debug: Usuarios vencidos actualizados: " . $stmt->affected_rows . " -->";
+        
+        // Registrar en historial los cambios de estado a VENCIDO
         if ($stmt->affected_rows > 0) {
             $query = "INSERT INTO historial_usuarios 
                      (usuario_producto_id, estado_anterior, estado_nuevo, motivo) 
-                     SELECT id, estado, 'EXPIRADO', 'Usuario expirado automáticamente' 
+                     SELECT id, estado, 'VENCIDO', 'Usuario vencido automáticamente' 
                      FROM usuarios_productos 
                      WHERE fecha_expiracion < ? 
-                     AND estado != 'EXPIRADO'";
+                     AND estado != 'VENCIDO'";
             $stmt = $conn->prepare($query);
             $stmt->bind_param("s", $today);
             $stmt->execute();
+            echo "<!-- Debug: Registros en historial agregados: " . $stmt->affected_rows . " -->";
         }
         
         $conn->commit();
+        echo "<!-- Debug: Transacción completada exitosamente -->";
         return true;
     } catch (Exception $e) {
         $conn->rollback();
+        echo "<!-- Debug: Error en la transacción: " . htmlspecialchars($e->getMessage()) . " -->";
         return false;
     }
 }
@@ -225,5 +263,44 @@ function formatPhoneNumber($phone) {
     // Si no se encontró código de país, devolver el número con formato básico
     error_log("No se encontró código de país, número original: " . $phone);
     return '+' . substr($phone, 0, 3) . ' ' . substr($phone, 3);
+}
+
+// Función para actualizar el estado de un usuario basado en sus préstamos
+function updateUserStateBasedOnLoans($usuario_producto_id) {
+    global $conn;
+    
+    // Obtener información del usuario
+    $query = "SELECT prestamos_activos, fecha_expiracion, estado,
+             DATEDIFF(fecha_expiracion, CURRENT_DATE) as dias_hasta_expiracion
+             FROM usuarios_productos 
+             WHERE id = ?";
+    $stmt = $conn->prepare($query);
+    $stmt->bind_param("i", $usuario_producto_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $usuario = $result->fetch_assoc();
+    
+    if (!$usuario) return false;
+    
+    // Determinar el estado correcto
+    $nuevo_estado = 'LIBRE';
+    
+    // Si la fecha de expiración ha pasado, el estado es VENCIDO
+    if ($usuario['dias_hasta_expiracion'] < 0) {
+        $nuevo_estado = 'VENCIDO';
+    }
+    // Si tiene préstamos activos, el estado es OCUPADO
+    else if ($usuario['prestamos_activos'] > 0) {
+        $nuevo_estado = 'OCUPADO';
+    }
+    
+    // Si el estado es diferente al actual, actualizarlo
+    if ($usuario['estado'] !== $nuevo_estado) {
+        updateUserStatus($usuario_producto_id, $nuevo_estado, 
+            'Estado actualizado automáticamente basado en préstamos activos y fecha de expiración');
+        return true;
+    }
+    
+    return false;
 }
 ?> 

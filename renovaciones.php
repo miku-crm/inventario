@@ -12,6 +12,9 @@ if (!$can_view) {
     exit;
 }
 
+// Verificar usuarios expirados
+checkExpiredUsers();
+
 // Verificar si hay un préstamo seleccionado
 $prestamo_id = isset($_GET['prestamo_id']) ? intval($_GET['prestamo_id']) : 0;
 
@@ -22,16 +25,21 @@ ini_set('display_errors', 1);
 echo "<!-- Debug: Préstamo ID = " . $prestamo_id . " -->";
 
 if ($prestamo_id > 0) {
-    $query = "SELECT p.*, up.user_name, pr.nombre as producto_nombre, c.nombre as cliente_nombre,
-             DATEDIFF(CURRENT_DATE, fecha_fin) as dias_vencido
+    // Consulta modificada para incluir préstamos con usuarios expirados
+    $query = "SELECT p.*, 
+             up.user_name, 
+             up.estado as estado_usuario, 
+             up.fecha_expiracion,
+             pr.nombre as producto_nombre, 
+             c.nombre as cliente_nombre,
+             DATEDIFF(CURRENT_DATE, p.fecha_fin) as dias_vencido,
+             DATEDIFF(up.fecha_expiracion, CURRENT_DATE) as dias_expiracion_usuario,
+             up.id as usuario_producto_id
              FROM prestamos p 
-             JOIN usuarios_productos up ON p.usuario_producto_id = up.id 
-             JOIN productos pr ON up.producto_id = pr.id 
-             JOIN clientes c ON p.cliente_id = c.id 
-             WHERE p.id = ? 
-             AND (p.estado = 'ACTIVO' 
-                  OR (p.estado = 'VENCIDO' 
-                      AND DATEDIFF(CURRENT_DATE, fecha_fin) <= 30))";
+             INNER JOIN usuarios_productos up ON p.usuario_producto_id = up.id 
+             INNER JOIN productos pr ON up.producto_id = pr.id 
+             INNER JOIN clientes c ON p.cliente_id = c.id 
+             WHERE p.id = ?";
     
     echo "<!-- Debug: Query = " . $query . " -->";
     
@@ -42,12 +50,38 @@ if ($prestamo_id > 0) {
     $prestamo = $result->fetch_assoc();
     
     echo "<!-- Debug: Préstamo encontrado = " . ($prestamo ? 'SI' : 'NO') . " -->";
+    if ($prestamo) {
+        echo "<!-- Debug: Valores del préstamo:";
+        echo "\n  estado_usuario = " . $prestamo['estado_usuario'];
+        echo "\n  fecha_expiracion = " . $prestamo['fecha_expiracion'];
+        echo "\n  dias_expiracion_usuario = " . $prestamo['dias_expiracion_usuario'];
+        echo "\n-->";
+    }
     
     if (!$prestamo) {
         echo "<!-- Debug: Préstamo no encontrado o fuera del período permitido para renovación -->";
         header("Location: prestamos.php?error=2");
         exit;
     }
+
+    // Verificar si el préstamo está vencido y fuera del período de renovación
+    if ($prestamo['estado'] === 'VENCIDO' && 
+        $prestamo['dias_vencido'] > 30 && 
+        $prestamo['estado_usuario'] !== 'EXPIRADO' && 
+        $prestamo['dias_expiracion_usuario'] >= 0) {
+        header("Location: prestamos.php?error=2");
+        exit;
+    }
+
+    // Verificar si el usuario está expirado y necesita renovación
+    $usuario_expirado = ($prestamo['estado_usuario'] === 'VENCIDO') || ($prestamo['dias_expiracion_usuario'] < 0);
+    
+    echo "<!-- Debug: Valores para determinar si el usuario está vencido:";
+    echo "\n  estado_usuario = '" . $prestamo['estado_usuario'] . "'";
+    echo "\n  dias_expiracion_usuario = " . $prestamo['dias_expiracion_usuario'];
+    echo "\n  fecha_expiracion = " . $prestamo['fecha_expiracion'];
+    echo "\n  usuario_expirado = " . ($usuario_expirado ? 'true' : 'false');
+    echo "\n-->";
 }
 
 // Verificar si hay una acción POST
@@ -283,29 +317,29 @@ include 'includes/header.php';
                         </h3>
                     </div>
                     <div class="card-body">
-                        <?php
-                        // Verificar si el usuario está expirado
-                        $query = "SELECT estado, fecha_expiracion FROM usuarios_productos WHERE id = ?";
-                        $stmt = $conn->prepare($query);
-                        $stmt->bind_param("i", $prestamo['usuario_producto_id']);
-                        $stmt->execute();
-                        $usuario = $stmt->get_result()->fetch_assoc();
-                        
-                        if ($usuario['estado'] === 'EXPIRADO'):
-                        ?>
+                        <?php if ($usuario_expirado): ?>
                             <div class="alert alert-warning">
                                 <h4 class="alert-heading">
                                     <i class="fas fa-exclamation-triangle"></i> Usuario Expirado
                                 </h4>
                                 <p>
-                                    El usuario del producto ha expirado. Debe renovar el usuario antes de 
+                                    El usuario del producto ha expirado. Es necesario renovar el usuario antes de 
                                     poder renovar el préstamo.
                                 </p>
                                 <hr>
-                                <a href="renovar_usuario_producto.php?id=<?php echo $prestamo['usuario_producto_id']; ?>" 
-                                   class="btn btn-warning">
-                                    <i class="fas fa-sync"></i> Renovar Usuario
-                                </a>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <strong>Usuario:</strong> <?php echo htmlspecialchars($prestamo['user_name']); ?><br>
+                                        <strong>Fecha de Expiración:</strong> <?php echo formatDate($prestamo['fecha_expiracion']); ?><br>
+                                        <?php if ($prestamo['dias_expiracion_usuario'] < 0): ?>
+                                            <strong class="text-danger">Expirado hace <?php echo abs($prestamo['dias_expiracion_usuario']); ?> días</strong>
+                                        <?php endif; ?>
+                                    </div>
+                                    <a href="renovar_usuario_producto.php?id=<?php echo $prestamo['usuario_producto_id']; ?>&return_to=renovaciones.php?prestamo_id=<?php echo $prestamo_id; ?>" 
+                                       class="btn btn-warning">
+                                        <i class="fas fa-sync"></i> Renovar Usuario
+                                    </a>
+                                </div>
                             </div>
                         <?php else: ?>
                             <form action="renovaciones.php" method="POST">

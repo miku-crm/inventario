@@ -15,6 +15,9 @@ if (!$can_view) {
 // Verificar préstamos vencidos
 checkExpiredLoans();
 
+// Verificar usuarios expirados
+checkExpiredUsers();
+
 // Verificar si hay una acción POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -115,35 +118,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
         case 'cancel':
             $id = intval($_POST['id']);
+            $precio_negociado = floatval($_POST['precio_negociado']);
             
             // Iniciar transacción
             $conn->begin_transaction();
             
             try {
-                // Obtener usuario_producto_id
-                $query = "SELECT usuario_producto_id FROM prestamos WHERE id = ?";
+                // Obtener información del préstamo y usuario
+                $query = "SELECT p.*, up.id as usuario_producto_id, up.max_prestamos,
+                         (SELECT COUNT(*) FROM renovaciones WHERE prestamo_id = p.id) as tiene_renovaciones,
+                         (SELECT COALESCE(SUM(cantidad_dispositivos), 0) 
+                          FROM prestamos 
+                          WHERE usuario_producto_id = up.id 
+                          AND estado = 'ACTIVO'
+                          AND id != p.id) as otros_dispositivos_activos
+                         FROM prestamos p
+                         JOIN usuarios_productos up ON p.usuario_producto_id = up.id
+                         WHERE p.id = ?";
                 $stmt = $conn->prepare($query);
                 $stmt->bind_param("i", $id);
                 $stmt->execute();
                 $result = $stmt->get_result();
-                $row = $result->fetch_assoc();
-                $usuario_producto_id = $row['usuario_producto_id'];
+                $prestamo = $result->fetch_assoc();
                 
-                // Actualizar estado del préstamo
-                $query = "UPDATE prestamos SET estado = 'CANCELADO' WHERE id = ?";
+                if (!$prestamo) {
+                    throw new Exception("Préstamo no encontrado");
+                }
+
+                // Actualizar precio_final y estado del préstamo
+                $query = "UPDATE prestamos 
+                         SET precio_final = ?,
+                             estado = 'CANCELADO' 
+                         WHERE id = ?";
                 $stmt = $conn->prepare($query);
-                $stmt->bind_param("i", $id);
+                $stmt->bind_param("di", $precio_negociado, $id);
                 $stmt->execute();
                 
-                // Actualizar estado del usuario
-                updateUserStatus($usuario_producto_id, 'LIBRE', 'Préstamo cancelado');
+                // Si tiene renovaciones, establecer sus precios a 0
+                if ($prestamo['tiene_renovaciones'] > 0) {
+                    $query = "UPDATE renovaciones 
+                             SET precio_nuevo = 0 
+                             WHERE prestamo_id = ?";
+                    $stmt = $conn->prepare($query);
+                    $stmt->bind_param("i", $id);
+                    $stmt->execute();
+                }
+                
+                // Actualizar prestamos_activos y estado del usuario
+                $query = "UPDATE usuarios_productos 
+                         SET prestamos_activos = prestamos_activos - ?,
+                             estado = CASE 
+                                WHEN ? = 0 THEN 'LIBRE'
+                                ELSE 'OCUPADO'
+                             END
+                         WHERE id = ?";
+                $stmt = $conn->prepare($query);
+                $stmt->bind_param("iii", 
+                    $prestamo['cantidad_dispositivos'],
+                    $prestamo['otros_dispositivos_activos'],
+                    $prestamo['usuario_producto_id']
+                );
+                $stmt->execute();
+                
+                // Registrar en historial
+                $query = "INSERT INTO historial_usuarios 
+                         (usuario_producto_id, estado_anterior, estado_nuevo, motivo) 
+                         VALUES (?, 
+                                (SELECT estado FROM usuarios_productos WHERE id = ?),
+                                CASE WHEN ? = 0 THEN 'LIBRE' ELSE 'OCUPADO' END,
+                                'Préstamo cancelado con precio negociado')";
+                $stmt = $conn->prepare($query);
+                $stmt->bind_param("iii", 
+                    $prestamo['usuario_producto_id'],
+                    $prestamo['usuario_producto_id'],
+                    $prestamo['otros_dispositivos_activos']
+                );
+                $stmt->execute();
                 
                 $conn->commit();
                 header("Location: prestamos.php?success=2");
                 exit;
             } catch (Exception $e) {
                 $conn->rollback();
-                throw $e;
+                error_log("Error al cancelar préstamo: " . $e->getMessage());
+                header("Location: prestamos.php?error=cancel");
+                exit;
             }
             break;
             
@@ -278,6 +337,9 @@ include 'includes/header.php';
                 case 'unauthorized':
                     echo "No tienes permiso para realizar esta acción.";
                     break;
+                case 'cancel':
+                    echo "Error al cancelar el préstamo. Por favor, inténtelo de nuevo.";
+                    break;
             }
             ?>
             <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
@@ -333,26 +395,21 @@ include 'includes/header.php';
             </thead>
             <tbody>
                 <?php
-                $query = "SELECT p.*, up.user_name, up.password, up.estado as estado_usuario, 
-                         up.fecha_expiracion,
-                         DATEDIFF(up.fecha_expiracion, CURRENT_DATE) as dias_expiracion,
-                         DATEDIFF(p.fecha_fin, CURRENT_DATE) as dias_prestamo,
-                         pr.nombre as producto_nombre, 
-                         c.nombre as cliente_nombre, c.telefono as cliente_telefono,
-                         (SELECT COUNT(*) FROM prestamos 
-                          WHERE usuario_producto_id = up.id 
-                          AND estado = 'VENCIDO') as prestamos_vencidos
+                $query = "SELECT p.*, 
+                         c.nombre as cliente_nombre,
+                         c.telefono,
+                         up.user_name,
+                         up.password,
+                         up.estado as estado_usuario,
+                         pr.nombre as producto_nombre,
+                         DATEDIFF(p.fecha_fin, CURRENT_DATE) as dias_vencido,
+                         DATEDIFF(up.fecha_expiracion, CURRENT_DATE) as dias_expiracion
                          FROM prestamos p 
-                         JOIN usuarios_productos up ON p.usuario_producto_id = up.id 
-                         JOIN productos pr ON up.producto_id = pr.id 
-                         JOIN clientes c ON p.cliente_id = c.id 
+                         INNER JOIN usuarios_productos up ON p.usuario_producto_id = up.id 
+                         INNER JOIN productos pr ON up.producto_id = pr.id 
+                         INNER JOIN clientes c ON p.cliente_id = c.id 
                          WHERE p.estado IN ('ACTIVO', 'VENCIDO')
-                         ORDER BY 
-                            CASE p.estado
-                                WHEN 'ACTIVO' THEN 1
-                                WHEN 'VENCIDO' THEN 2
-                            END,
-                            p.fecha_fin ASC";
+                         ORDER BY p.id DESC";
                 $result = $conn->query($query);
                 
                 while ($row = $result->fetch_assoc()):
@@ -375,11 +432,11 @@ include 'includes/header.php';
                         </small>
                     </td>
                     <td>
-                        <?php echo htmlspecialchars(formatPhoneNumber($row['cliente_telefono'])); ?>
+                        <?php echo htmlspecialchars(formatPhoneNumber($row['telefono'])); ?>
                         <br>
                         <small>
                             <?php 
-                            $dias_restantes = $row['dias_prestamo'];
+                            $dias_restantes = $row['dias_vencido'];
                             $es_vencido = $row['estado'] === 'VENCIDO';
                             
                             if ($es_vencido) {
@@ -392,11 +449,29 @@ include 'includes/header.php';
                     </td>
                     <td>$<?php echo formatMoney($row['precio_final']); ?></td>
                     <td><?php echo formatDate($row['fecha_fin']); ?></td>
-                    <td>
-                        <?php if ($row['estado'] === 'ACTIVO'): ?>
+                    <td class="text-center">
                         <div class="btn-group">
                             <?php if ($can_edit): ?>
-                            <button class="btn btn-sm btn-info edit-btn" 
+                            <button type="button" 
+                                    class="btn btn-info btn-sm view-btn" 
+                                    data-id="<?php echo $row['id']; ?>"
+                                    data-cliente="<?php echo htmlspecialchars($row['cliente_nombre']); ?>"
+                                    data-telefono="<?php echo htmlspecialchars($row['telefono']); ?>"
+                                    data-producto="<?php echo htmlspecialchars($row['producto_nombre']); ?>"
+                                    data-usuario="<?php echo htmlspecialchars($row['user_name']); ?>"
+                                    data-password="<?php echo htmlspecialchars($row['password']); ?>"
+                                    data-precio="<?php echo $row['precio_final']; ?>"
+                                    data-dispositivos="<?php echo $row['cantidad_dispositivos']; ?>"
+                                    data-fecha-inicio="<?php echo $row['fecha_inicio']; ?>"
+                                    data-fecha-fin="<?php echo $row['fecha_fin']; ?>"
+                                    data-estado="<?php echo $row['estado']; ?>">
+                                <i class="fas fa-eye"></i> Ver
+                            </button>
+                            <?php endif; ?>
+
+                            <?php if ($can_edit && $row['estado'] == 'ACTIVO'): ?>
+                            <button type="button" 
+                                    class="btn btn-warning btn-sm edit-btn" 
                                     data-id="<?php echo $row['id']; ?>"
                                     data-precio="<?php echo $row['precio_unitario']; ?>"
                                     data-factor="<?php echo $row['factor_precio_id']; ?>"
@@ -404,53 +479,28 @@ include 'includes/header.php';
                                     data-fin="<?php echo $row['fecha_fin']; ?>">
                                 <i class="fas fa-edit"></i> Editar
                             </button>
-                            <a href="renovaciones.php?prestamo_id=<?php echo $row['id']; ?>" class="btn btn-sm btn-success">
+                            <?php endif; ?>
+                            
+                            <?php if ($can_edit && $row['estado'] == 'ACTIVO'): ?>
+                            <a href="renovaciones.php?prestamo_id=<?php echo $row['id']; ?>" 
+                               class="btn btn-success btn-sm">
                                 <i class="fas fa-sync"></i> Renovar
                             </a>
                             <?php endif; ?>
                             
-                            <button class="btn btn-sm btn-info view-btn"
-                                    data-id="<?php echo $row['id']; ?>"
-                                    data-cliente="<?php echo htmlspecialchars($row['cliente_nombre']); ?>"
-                                    data-telefono="<?php echo htmlspecialchars(formatPhoneNumber($row['cliente_telefono'])); ?>"
-                                    data-producto="<?php echo htmlspecialchars($row['producto_nombre']); ?>"
-                                    data-usuario="<?php echo htmlspecialchars($row['user_name']); ?>"
-                                    data-password="<?php echo htmlspecialchars($row['password']); ?>"
-                                    data-precio="<?php echo $row['precio_final']; ?>"
-                                    data-dispositivos="<?php echo $row['cantidad_dispositivos']; ?>"
-                                    data-fecha-inicio="<?php echo $row['fecha_inicio']; ?>"
-                                    data-fecha-fin="<?php echo $row['fecha_fin']; ?>"
-                                    data-estado="<?php echo $row['estado']; ?>">
-                                <i class="fas fa-eye"></i> Ver
-                            </button>
-                        </div>
-                        <?php elseif ($row['estado'] === 'VENCIDO'): ?>
-                            <?php
-                            $fecha_fin = new DateTime($row['fecha_fin']);
-                            $hoy = new DateTime();
-                            $dias_vencido = $hoy->diff($fecha_fin)->days;
-                            
-                            if ($dias_vencido <= 30 && $can_edit): ?>
-                                <a href="renovaciones.php?prestamo_id=<?php echo $row['id']; ?>" class="btn btn-sm btn-success">
-                                    <i class="fas fa-sync"></i> Renovar
-                                </a>
+                            <!-- boton de prueba -->
+                            <?php if ($can_edit && $row['estado'] == 'VENCIDO'): ?>
+                                <form method="POST" action="prestamos.php" style="display: inline;">
+                                    <input type="hidden" name="action" value="liberar">
+                                    <input type="hidden" name="id" value="<?php echo $row['id']; ?>">
+                                    <button type="submit" class="btn btn-danger btn-sm">
+                                        <i class="fas fa-unlock"></i> Liberar
+                                    </button>
+                                </form>
                             <?php endif; ?>
-                            
-                            <button class="btn btn-sm btn-info view-btn"
-                                    data-id="<?php echo $row['id']; ?>"
-                                    data-cliente="<?php echo htmlspecialchars($row['cliente_nombre']); ?>"
-                                    data-telefono="<?php echo htmlspecialchars(formatPhoneNumber($row['cliente_telefono'])); ?>"
-                                    data-producto="<?php echo htmlspecialchars($row['producto_nombre']); ?>"
-                                    data-usuario="<?php echo htmlspecialchars($row['user_name']); ?>"
-                                    data-password="<?php echo htmlspecialchars($row['password']); ?>"
-                                    data-precio="<?php echo $row['precio_final']; ?>"
-                                    data-dispositivos="<?php echo $row['cantidad_dispositivos']; ?>"
-                                    data-fecha-inicio="<?php echo $row['fecha_inicio']; ?>"
-                                    data-fecha-fin="<?php echo $row['fecha_fin']; ?>"
-                                    data-estado="<?php echo $row['estado']; ?>">
-                                <i class="fas fa-eye"></i> Ver
-                            </button>
-                        <?php endif; ?>
+                            <!-- fin boton de prueba -->
+
+                        </div>
                     </td>
                 </tr>
                 <?php endwhile; ?>
@@ -461,201 +511,42 @@ include 'includes/header.php';
 
 <?php 
 // Incluir los modales
+include 'includes/modals/prestamos/view.php';
 include 'includes/modals/prestamos/create.php';
 include 'includes/modals/prestamos/edit.php';
-include 'includes/modals/prestamos/view.php';
 ?>
 
-<!-- Incluir el JavaScript específico de préstamos -->
+<!-- Scripts específicos de préstamos -->
+<script src="includes/js/prestamos/view.js"></script>
 <script src="includes/js/prestamos/create.js"></script>
 <script src="includes/js/prestamos/edit.js"></script>
-<script src="includes/js/prestamos/view.js"></script>
-
-<?php include 'includes/footer.php'; ?>
-
 <script>
 $(document).ready(function() {
-    // Inicializar DataTables
-    var prestamosTable = $('#prestamosTable').DataTable({
-        pageLength: 25,
+    // Inicializar tooltips
+    $('[data-bs-toggle="tooltip"]').tooltip();
+    
+    // Inicializar datatable
+    $('#prestamosTable').DataTable({
         language: {
-            decimal: "",
-            emptyTable: "No hay información",
-            info: "Mostrando _START_ a _END_ de _TOTAL_ registros",
-            infoEmpty: "Mostrando 0 a 0 de 0 registros",
-            infoFiltered: "(Filtrado de _MAX_ total registros)",
-            infoPostFix: "",
-            thousands: ",",
-            lengthMenu: "Mostrar _MENU_ registros",
-            loadingRecords: "Cargando...",
-            processing: "Procesando...",
-            search: "Buscar:",
-            zeroRecords: "Sin resultados encontrados",
-            paginate: {
-                first: "Primero",
-                last: "Último",
-                next: "Siguiente",
-                previous: "Anterior"
-            }
+            url: 'assets/js/dataTables.spanish.json'
         },
         order: [[0, 'desc']]
-    });
-
-    // Filtro de producto para la tabla de transacciones
-    $('#filtroProducto').on('change', function() {
-        var producto = $(this).val();
-        prestamosTable.column(1).search(producto).draw();
-    });
-
-    // Actualizar usuarios disponibles al cambiar el producto
-    $('#producto_select').change(function() {
-        const productoId = $(this).val();
-        const precioVenta = $('option:selected', this).data('precio');
-        
-        $('#precio_unitario').val(precioVenta);
-        
-        if (productoId) {
-            $.ajax({
-                url: 'get_usuarios_libres.php',
-                method: 'POST',
-                data: { producto_id: productoId },
-                success: function(response) {
-                    $('#usuario_select').html(response);
-                }
-            });
-        } else {
-            $('#usuario_select').html('<option value="">Seleccione un producto primero</option>');
-        }
-    });
-    
-    // Manejar clic en botón cancelar
-    $('.cancel-btn').click(function() {
-        const id = $(this).data('id');
-        
-        Swal.fire({
-            title: '¿Estás seguro?',
-            text: "¿Deseas cancelar este préstamo?",
-            icon: 'warning',
-            showCancelButton: true,
-            confirmButtonColor: '#3085d6',
-            cancelButtonColor: '#d33',
-            confirmButtonText: 'Sí, cancelar',
-            cancelButtonText: 'No'
-        }).then((result) => {
-            if (result.isConfirmed) {
-                const form = document.createElement('form');
-                form.method = 'POST';
-                form.action = 'prestamos.php';
-                
-                const actionInput = document.createElement('input');
-                actionInput.type = 'hidden';
-                actionInput.name = 'action';
-                actionInput.value = 'cancel';
-                
-                const idInput = document.createElement('input');
-                idInput.type = 'hidden';
-                idInput.name = 'id';
-                idInput.value = id;
-                
-                form.appendChild(actionInput);
-                form.appendChild(idInput);
-                document.body.appendChild(form);
-                form.submit();
-            }
-        });
-    });
-    
-    // Debug: Verificar si el script se está ejecutando
-    console.log('Script de préstamos cargado');
-    
-    // Debug: Verificar si encuentra los botones liberar
-    console.log('Botones liberar encontrados:', $('.liberar-btn').length);
-    
-    // Manejar clic en botón liberar
-    $(document).on('click', '.liberar-btn', function(e) {
-        console.log('Botón liberar clickeado');
-        e.preventDefault();
-        
-        const id = $(this).data('id');
-        console.log('ID del préstamo:', id);
-        
-        Swal.fire({
-            title: '¿Estás seguro?',
-            text: "¿Deseas liberar esta cuenta?",
-            icon: 'warning',
-            showCancelButton: true,
-            confirmButtonColor: '#3085d6',
-            cancelButtonColor: '#d33',
-            confirmButtonText: 'Sí, liberar',
-            cancelButtonText: 'No'
-        }).then((result) => {
-            if (result.isConfirmed) {
-                console.log('Confirmación aceptada, enviando formulario');
-                const form = document.createElement('form');
-                form.method = 'POST';
-                form.action = 'prestamos.php';
-                
-                const actionInput = document.createElement('input');
-                actionInput.type = 'hidden';
-                actionInput.name = 'action';
-                actionInput.value = 'liberar';
-                
-                const idInput = document.createElement('input');
-                idInput.type = 'hidden';
-                idInput.name = 'id';
-                idInput.value = id;
-                
-                form.appendChild(actionInput);
-                form.appendChild(idInput);
-                document.body.appendChild(form);
-                form.submit();
-            }
-        });
-    });
-    
-    // Establecer fecha mínima como hoy para las fechas
-    const today = new Date().toISOString().split('T')[0];
-    $('#fecha_inicio').attr('min', today);
-    $('#fecha_fin').attr('min', today);
-    
-    // Establecer fecha de inicio por defecto
-    $('#fecha_inicio').val(today);
-    
-    // Validación de precio en tiempo real
-    $('#precio_unitario').on('input', function() {
-        const precio = parseFloat($(this).val());
-        
-        if (isNaN(precio) || precio <= 0) {
-            $(this).addClass('is-invalid');
-            $('#precio-feedback').text('El precio debe ser mayor a 0');
-            $('#submit-btn').prop('disabled', true);
-        } else {
-            $(this).removeClass('is-invalid').addClass('is-valid');
-            $('#precio-feedback').text('');
-            $('#submit-btn').prop('disabled', false);
-        }
-        
-        actualizarPrecioFinal();
-    });
-    
-    // Actualizar precio final cuando cambia el factor
-    $('#factor_precio_id').on('change', function() {
-        actualizarPrecioFinal();
     });
     
     // Función para actualizar precio final
     function actualizarPrecioFinal() {
         const precioBase = parseFloat($('#precio_unitario').val()) || 0;
         const factorPorcentaje = parseFloat($('#factor_precio_id option:selected').data('porcentaje')) || 0;
-        
         const precioFinal = precioBase * (1 + (factorPorcentaje / 100));
         $('#precio_final').val(precioFinal.toFixed(2));
     }
     
+    // Event listeners para actualizar precio
+    $('#precio_unitario, #factor_precio_id').on('change input', actualizarPrecioFinal);
+    
     // Validación de cantidad de dispositivos
     $('#cantidad_dispositivos').on('input', function() {
         const cantidad = parseInt($(this).val());
-        
         if (isNaN(cantidad) || cantidad < 1) {
             $(this).addClass('is-invalid');
             $('#dispositivos-feedback').text('La cantidad debe ser mayor a 0');
@@ -703,91 +594,13 @@ $(document).ready(function() {
             $(this).removeClass('is-invalid').addClass('is-valid');
             $('#fecha-inicio-feedback').text('');
             $('#submit-btn').prop('disabled', false);
-            
-            // Actualizar fecha mínima de fecha fin
             $('#fecha_fin').attr('min', $(this).val());
         }
     });
-
-    // Función auxiliar para copiar al portapapeles
-    function copyToClipboard(text) {
-        navigator.clipboard.writeText(text).then(function() {
-            Swal.fire({
-                icon: 'success',
-                title: '¡Copiado!',
-                text: 'Texto copiado al portapapeles',
-                showConfirmButton: false,
-                timer: 1500
-            });
-        }).catch(function(err) {
-            console.error('Error al copiar: ', err);
-            Swal.fire({
-                icon: 'error',
-                title: 'Error',
-                text: 'No se pudo copiar al portapapeles'
-            });
-        });
-    }
-
-    // Copiar datos del préstamo
-    $('.copy-data-btn').click(function() {
-        const producto = $(this).data('producto');
-        const dispositivos = $(this).data('dispositivos');
-        const usuario = $(this).data('usuario');
-        const password = $(this).data('password');
-        const fechaFin = formatDate($(this).data('fin'));
-        
-        const texto = `Producto: ${producto}\n` +
-                     `Cantidad de dispositivos: ${dispositivos}\n` +
-                     `Usuario: ${usuario}\n` +
-                     `Contraseña: ${password}\n` +
-                     `Fecha de expiración: ${fechaFin}`;
-        
-        copyToClipboard(texto);
-    });
-
-    // Copiar mensaje de renovación
-    $('.copy-renewal-btn').click(function() {
-        const dias = $(this).data('dias');
-        const producto = $(this).data('producto');
-        const usuario = $(this).data('usuario');
-        
-        const texto = `Producto: ${producto}\n` +
-                     `Usuario: ${usuario}\n` +
-                     `Su cuenta expira en ${dias} días. ¿Le gustaría renovar su suscripción?`;
-        
-        copyToClipboard(texto);
-    });
-
-    // Copiar mensaje de actualización
-    $('.copy-update-btn').click(function() {
-        const fechaFin = formatDate($(this).data('fin'));
-        const producto = $(this).data('producto');
-        const usuario = $(this).data('usuario');
-        
-        const texto = `Producto: ${producto}\n` +
-                     `Usuario: ${usuario}\n` +
-                     `Cuenta actualizada exitosamente. Nueva fecha de expiración: ${fechaFin}`;
-        
-        copyToClipboard(texto);
-    });
-
-    // Función para formatear fecha
-    function formatDate(dateString) {
-        const date = new Date(dateString);
-        return date.toLocaleDateString('es-ES', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric'
-        });
-    }
-
-    // Agregar tooltips a los botones
-    $('[data-bs-toggle="tooltip"]').tooltip();
 });
 </script>
 
-<!-- Estilos adicionales -->
+<!-- Estilos específicos -->
 <style>
 .btn-group .btn {
     margin-right: 2px;
@@ -840,4 +653,6 @@ $(document).ready(function() {
     font-weight: bold;
     color: #0d6efd;
 }
-</style> 
+</style>
+</body>
+</html> 
